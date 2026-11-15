@@ -1,5 +1,7 @@
 CXX = icpx
-CXXFLAGS = -O3 -Wall -Wextra -march=native -std=c++17
+OPS = -mavx2 -mfma -DNDEBUG -march=native # Tune this to your own CPU!
+
+CXXFLAGS = -O3 -Wall -Wextra $(OPS) -std=c++20
 CPPFLAGS = -Iinclude -Iexternal/highway -MMD -MP
 
 SRCS = $(wildcard src/*.cpp)
@@ -10,11 +12,11 @@ HWY_LIB = build/highway/libhwy.a
 
 all: Blake3
 
-Blake3: $(OBJS)
-	$(CXX) $(OBJS) -o $@
+Blake3: $(OBJS) $(HWY_LIB)
+	$(CXX) $^ -o $@
 
 build/%.o: src/%.cpp | build
-	$(CXX) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -c $< -o $@
 
 $(HWY_LIB):
 	cmake --build build/highway -j
@@ -23,6 +25,6 @@ build:
 	mkdir -p build
 
 clean:
-	rm -rf build
+	rm -rf build/*.o build/*.d Blake3
 
 -include $(DEPS)

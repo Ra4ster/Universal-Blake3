@@ -9,22 +9,8 @@
 
 #include "blake3.hpp"
 
-int main(int argc, char* argv[])
+int main()
 {
-  if (argc > 2)
-    return 1;
-
-  if (argc == 2)
-  {
-    const std::string input = argv[1];
-
-    Deep::Blake3 hasher;
-    hasher.Update(input.data(), input.size());
-
-    std::cout << input << " hashed:\n\n" << hasher.Hex() << std::endl;
-    return 0;
-  }
-
   constexpr size_t DATA_SIZE = 256ull * 1024 * 1024;
   constexpr int ITERATIONS = 10;
 

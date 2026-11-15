@@ -1,5 +1,7 @@
-#include "blake3.hpp"
+#include <cstring>
 #include <iostream>
+
+#include "blake3.hpp"
 
 int main(int argc, char* argv[])
 {

@@ -5,7 +5,7 @@
     <hr />
 </div>
 
-This is an implementation of [BLAKE3](<https://en.wikipedia.org/wiki/BLAKE_(hash_function)#BLAKE3>) with cross-platform, cross-CPU architecture compatibility. Whereas many implementations are well-optimized for certain flags (AVX-256, FMA, etc.) this implementation is optimized using [Google Highway](https://github.com/google/highway), an SIMD runtime which can dispatch to quite a lot of specialized CPU flags such as RISC-V (RVV), Diamond Rapids (AVX10_2), WebAssembly (WASM, WASM_EMU256) and more.
+This is a **header-only** implementation of [BLAKE3](<https://en.wikipedia.org/wiki/BLAKE_(hash_function)#BLAKE3>) with cross-platform, cross-CPU architecture compatibility. Whereas many implementations are well-optimized for certain flags (AVX-256, FMA, etc.) this implementation is optimized using [Google Highway](https://github.com/google/highway), an SIMD runtime which can dispatch to quite a lot of specialized CPU flags such as RISC-V (RVV), Diamond Rapids (AVX10_2), WebAssembly (WASM, WASM_EMU256) and more.
 
 ## Performance Results
 
@@ -30,7 +30,7 @@ Single-threaded, this implementation matches the official BLAKE3 library, which 
 | 12      | 10.2 ms | 26.3 GB/s  |
 | 20      | 9.3 ms  | 28.8 GB/s  |
 
-Scaling is close to linear across the 6 performance cores.
+Scaling is close to linear across the first 6 performance cores.
 
 ### Test setup
 
@@ -40,7 +40,7 @@ Scaling is close to linear across the 6 performance cores.
 - **Multithreaded:** `Blake3::UpdateParallel`, which splits the input into 256 KiB subtrees hashed on a persistent thread pool
 - **Reference:** the official BLAKE3 Rust implementation via the Python `blake3` package, timed on a buffer of the same size.
 
-Swap `src/main.cpp` with `test.cpp`. Then run `./Blake3` with no arguments to reproduce the benchmark on your own machine.
+Run `make bench` to reproduce the benchmark on your own machine.
 
 ## Building
 
@@ -54,7 +54,7 @@ cd Universal-Blake3
 make
 ```
 
-> **Note:** Consider looking at the flags inside of the `Makefile` before you run `make`. Some flags/commands may not be right for you! Also, you may benefit from manually turning on flags like -mfma, -mavx2, etc.
+> **Note:** Consider looking at the flags inside of the `Makefile` before you run `make`. Some flags/commands may not be right for you! In particular, the default compiler is `icpx`, which I'm guessing you are not using. Also, you may benefit from manually turning on flags like -mfma, -mavx2, etc.
 
 ### Showcase
 

@@ -1,30 +1,21 @@
 CXX = icpx
-OPS = -mavx2 -mfma -DNDEBUG -march=native # Tune this to your own CPU!
+OPS = -DNDEBUG -march=native # Tune this to your own CPU!
 
 CXXFLAGS = -O3 -Wall -Wextra $(OPS) -std=c++20 -pthread
-CPPFLAGS = -Iinclude -Iexternal/highway -MMD -MP
-
-SRCS = $(wildcard src/*.cpp)
-OBJS = $(patsubst src/%.cpp, build/%.o,$(SRCS))
-DEPS = $(OBJS:.o=.d)
-
-HWY_LIB = build/highway/libhwy.a
+CPPFLAGS = -Iinclude -Iexternal/highway
 
 all: Blake3
 
-Blake3: $(OBJS) $(HWY_LIB)
-	$(CXX) -pthread $^ -o $@
+Blake3: src/main.cpp include/blake3.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@
 
-build/%.o: src/%.cpp | build
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -c $< -o $@
+Blake3_bench: bench.cpp include/blake3.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@
 
-$(HWY_LIB):
-	cmake --build build/highway -j
-
-build:
-	mkdir -p build
+bench: Blake3_bench
+	./Blake3_bench
 
 clean:
-	rm -rf build/*.o build/*.d Blake3
+	rm -f Blake3 Blake3_bench
 
--include $(DEPS)
+.PHONY: all bench clean

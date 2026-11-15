@@ -1,8 +1,8 @@
 /.cache/
-/build/
 /Blake3
+/Blake3_bench
 /compile_commands.json
 
 *.swp
 *.swo
-*.~
+*~

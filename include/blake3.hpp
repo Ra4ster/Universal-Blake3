@@ -1,43 +1,23 @@
 #pragma once
+#include <algorithm>
 #include <atomic>
+#include <bit>
 #include <condition_variable>
 #include <cstdint>
-#include <cstring>
 #include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
 
 #include <hwy/highway.h>
-namespace hn = hwy::HWY_NAMESPACE;
 
 namespace Deep
 {
-
-#define MIN(a, b) (((a) < (b)) ? (a) : (b))
-
-inline constexpr uint32_t default_cv[8] = {
-    0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A, 0x510E527F, 0x9B05688C, 0x1F83D9AB, 0x5BE0CD19};
-constexpr uint32_t default_m[16] = {2, 6, 3, 10, 7, 0, 4, 13, 1, 11, 12, 5, 9, 14, 15, 8};
-inline constexpr uint8_t msg_schedule[7][16] = {
-    {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15},
-    {2, 6, 3, 10, 7, 0, 4, 13, 1, 11, 12, 5, 9, 14, 15, 8},
-    {3, 4, 10, 12, 13, 2, 7, 14, 6, 5, 9, 0, 11, 15, 8, 1},
-    {10, 7, 12, 9, 14, 3, 13, 15, 4, 0, 11, 2, 5, 8, 1, 6},
-    {12, 13, 9, 11, 15, 10, 14, 8, 7, 2, 5, 3, 0, 1, 6, 4},
-    {9, 14, 11, 5, 8, 12, 15, 1, 13, 3, 0, 10, 2, 6, 4, 7},
-    {11, 15, 5, 0, 1, 9, 8, 6, 14, 10, 2, 12, 3, 4, 7, 13}};
+namespace hn = hwy::HWY_NAMESPACE;
 
 class Blake3
 {
 public:
-  Blake3() noexcept
-      : chunk_counter_(0)
-      , buffer_len_(0)
-      , cv_stack_len_(0)
-  {
-  }
-
   void Update(const void* data, size_t len) noexcept
   {
     const uint8_t* ptr = static_cast<const uint8_t*>(data);
@@ -63,7 +43,7 @@ public:
         continue;
       }
 
-      const size_t take = MIN(len, 1024 - buffer_len_);
+      const size_t take = std::min(len, 1024 - buffer_len_);
 
       hwy::CopyBytes(ptr, chunk_buffer_ + buffer_len_, take);
 
@@ -100,7 +80,7 @@ public:
       }
 
       const size_t tasks = (len - 1) / TASK_BYTES;
-      const size_t workers = MIN(static_cast<size_t>(threads), tasks);
+      const size_t workers = std::min<size_t>(threads, tasks);
       const uint64_t base = chunk_counter_;
 
       std::vector<uint32_t> cvs(tasks * 8);
@@ -121,8 +101,7 @@ public:
 
       ThreadPool::Instance().Run(workers - 1, work);
 
-      const unsigned log2_task =
-          static_cast<unsigned>(hwy::Num0BitsBelowLS1Bit_Nonzero64(TASK_CHUNKS));
+      const unsigned log2_task = static_cast<unsigned>(std::countr_zero(TASK_CHUNKS));
 
       for (size_t i = 0; i < tasks; ++i)
       {
@@ -156,7 +135,7 @@ public:
     {
       const size_t offset = i * 64;
       const size_t remaining = buffer_len_ > offset ? buffer_len_ - offset : 0;
-      const size_t block_len = MIN(remaining, 64);
+      const size_t block_len = std::min<size_t>(remaining, 64);
 
       uint8_t bytes[64] = {};
 
@@ -228,6 +207,23 @@ public:
   }
 
 private:
+  static constexpr uint32_t default_cv[8] = {0x6A09E667,
+                                             0xBB67AE85,
+                                             0x3C6EF372,
+                                             0xA54FF53A,
+                                             0x510E527F,
+                                             0x9B05688C,
+                                             0x1F83D9AB,
+                                             0x5BE0CD19};
+  static constexpr uint8_t msg_schedule[7][16] = {
+      {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15},
+      {2, 6, 3, 10, 7, 0, 4, 13, 1, 11, 12, 5, 9, 14, 15, 8},
+      {3, 4, 10, 12, 13, 2, 7, 14, 6, 5, 9, 0, 11, 15, 8, 1},
+      {10, 7, 12, 9, 14, 3, 13, 15, 4, 0, 11, 2, 5, 8, 1, 6},
+      {12, 13, 9, 11, 15, 10, 14, 8, 7, 2, 5, 3, 0, 1, 6, 4},
+      {9, 14, 11, 5, 8, 12, 15, 1, 13, 3, 0, 10, 2, 6, 4, 7},
+      {11, 15, 5, 0, 1, 9, 8, 6, 14, 10, 2, 12, 3, 4, 7, 13}};
+
   static constexpr uint32_t CHUNK_START = 1u;
   static constexpr uint32_t CHUNK_END = 2u;
   static constexpr uint32_t PARENT = 4u;
@@ -352,8 +348,8 @@ private:
   }
 
   template <class D>
-  static HWY_INLINE void QRound(D d, hn::Vec<D>* HWY_RESTRICT words, int a, int b, int c, int e,
-                                hn::Vec<D> m0, hn::Vec<D> m1) noexcept
+  static HWY_INLINE void QRound(D d, hn::Vec<D>* words, int a, int b, int c, int e, hn::Vec<D> m0,
+                                hn::Vec<D> m1) noexcept
   {
     words[a] = hn::Add(hn::Add(words[a], words[b]), m0);
     words[e] = Rotr<16, D>(d, hn::Xor(words[e], words[a]));
@@ -367,8 +363,7 @@ private:
   }
 
   template <class D>
-  static HWY_INLINE void Compress(D d, hn::Vec<D>* HWY_RESTRICT cv,
-                                  const hn::Vec<D>* HWY_RESTRICT m, hn::Vec<D> counter_low,
+  static HWY_INLINE void Compress(D d, hn::Vec<D>* cv, const hn::Vec<D>* m, hn::Vec<D> counter_low,
                                   hn::Vec<D> counter_high, hn::Vec<D> block_len,
                                   hn::Vec<D> flags) noexcept
   {
@@ -407,8 +402,8 @@ private:
   }
 
   template <class D>
-  static HWY_INLINE void LoadBlock(D d, const uint8_t* const* HWY_RESTRICT ptrs, size_t offset,
-                                   hn::Vec<D>* HWY_RESTRICT m) noexcept
+  static HWY_INLINE void LoadBlock(D d, const uint8_t* const* ptrs, size_t offset,
+                                   hn::Vec<D>* m) noexcept
   {
     using V = hn::Vec<D>;
     const hn::Repartition<uint8_t, D> d8;
@@ -498,8 +493,8 @@ private:
   }
 
   template <class D>
-  static HWY_INLINE void HashChunks(D d, const uint8_t* HWY_RESTRICT data, size_t valid,
-                                    uint64_t counter, hn::Vec<D>* HWY_RESTRICT cv) noexcept
+  static HWY_INLINE void HashChunks(D d, const uint8_t* data, size_t valid, uint64_t counter,
+                                    hn::Vec<D>* cv) noexcept
   {
     using V = hn::Vec<D>;
     const size_t lanes = hn::Lanes(d);
@@ -535,9 +530,8 @@ private:
   }
 
   template <class D>
-  static HWY_INLINE void MergeParents(D d, const hn::Vec<D>* HWY_RESTRICT lo,
-                                      const hn::Vec<D>* HWY_RESTRICT hi,
-                                      hn::Vec<D>* HWY_RESTRICT out) noexcept
+  static HWY_INLINE void MergeParents(D d, const hn::Vec<D>* lo, const hn::Vec<D>* hi,
+                                      hn::Vec<D>* out) noexcept
   {
     using V = hn::Vec<D>;
 
@@ -558,8 +552,8 @@ private:
   }
 
   template <class D>
-  static HWY_INLINE void HashGroup(D d, const uint8_t* HWY_RESTRICT data, size_t batches,
-                                   uint64_t counter, uint32_t* HWY_RESTRICT out) noexcept
+  static HWY_INLINE void HashGroup(D d, const uint8_t* data, size_t batches, uint64_t counter,
+                                   uint32_t* out) noexcept
   {
     using V = hn::Vec<D>;
     const size_t lanes = hn::Lanes(d);
@@ -580,9 +574,8 @@ private:
       out[j] = hn::GetLane(cvs[0][j]);
   }
 
-  static HWY_INLINE void MergePair(const uint32_t* HWY_RESTRICT left,
-                                   const uint32_t* HWY_RESTRICT right,
-                                   uint32_t* HWY_RESTRICT out) noexcept
+  static HWY_INLINE void MergePair(const uint32_t* left, const uint32_t* right,
+                                   uint32_t* out) noexcept
   {
     const hn::ScalableTag<uint32_t> d;
     using V = hn::Vec<decltype(d)>;
@@ -663,7 +656,7 @@ private:
     PushChainingValue(result, 0);
   }
 
-  void ProcessChunksSIMD(const uint8_t* HWY_RESTRICT data, size_t num_chunks) noexcept
+  void ProcessChunksSIMD(const uint8_t* data, size_t num_chunks) noexcept
   {
     const hn::ScalableTag<uint32_t> d;
     using V = hn::Vec<decltype(d)>;
@@ -683,7 +676,7 @@ private:
 
         const size_t total = batches * lanes;
 
-        PushChainingValue(root, static_cast<unsigned>(hwy::Num0BitsBelowLS1Bit_Nonzero64(total)));
+        PushChainingValue(root, static_cast<unsigned>(std::countr_zero(total)));
 
         chunk_counter_ += total;
         data += total * 1024;
@@ -692,7 +685,7 @@ private:
       else
       {
         const size_t to_boundary = lanes - (chunk_counter_ & (lanes - 1));
-        const size_t count = MIN(num_chunks, to_boundary);
+        const size_t count = std::min(num_chunks, to_boundary);
 
         V cv[8];
         HashChunks(d, data, count, chunk_counter_, cv);

@@ -1,15 +1,13 @@
+#include "blake3.hpp"
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <iomanip>
 #include <iostream>
 #include <string>
-#include <thread>
 #include <vector>
 
-#include "blake3.hpp"
-
-int main()
+int main(void)
 {
   constexpr size_t DATA_SIZE = 256ull * 1024 * 1024;
   constexpr int ITERATIONS = 100;
@@ -48,17 +46,13 @@ int main()
     for (int i = 0; i < ITERATIONS; ++i)
     {
       const auto start = std::chrono::steady_clock::now();
-
       hash();
 
       const auto end = std::chrono::steady_clock::now();
-
       const double seconds = std::chrono::duration<double>(end - start).count();
 
       times.push_back(seconds);
-
       const double gbps = (DATA_SIZE / 1e9) / seconds;
-
       std::cout << "Run " << i + 1 << ": " << std::fixed << std::setprecision(3) << seconds * 1000.0
                 << " ms | " << gbps << " GB/s\n";
     }
@@ -81,9 +75,6 @@ int main()
     std::cout << "Digest: " << digest << "\n\n";
   };
 
-  const unsigned threads = std::max(1u, std::thread::hardware_concurrency());
-
   bench("20 threads", 20);
-
   return 0;
 }

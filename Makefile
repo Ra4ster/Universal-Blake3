@@ -1,7 +1,7 @@
 CXX = icpx
 OPS = -mavx2 -mfma -DNDEBUG -march=native # Tune this to your own CPU!
 
-CXXFLAGS = -O3 -Wall -Wextra $(OPS) -std=c++20
+CXXFLAGS = -O3 -Wall -Wextra $(OPS) -std=c++20 -pthread
 CPPFLAGS = -Iinclude -Iexternal/highway -MMD -MP
 
 SRCS = $(wildcard src/*.cpp)
@@ -13,7 +13,7 @@ HWY_LIB = build/highway/libhwy.a
 all: Blake3
 
 Blake3: $(OBJS) $(HWY_LIB)
-	$(CXX) $^ -o $@
+	$(CXX) -pthread $^ -o $@
 
 build/%.o: src/%.cpp | build
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -c $< -o $@

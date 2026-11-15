@@ -1,0 +1,7 @@
+/build/
+/Blake3
+/compile_commands.json
+
+*.swp
+*.swo
+*.~

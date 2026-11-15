@@ -1,7 +1,9 @@
 #pragma once
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <cstring>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -117,15 +119,7 @@ public:
         }
       };
 
-      {
-        std::vector<std::jthread> pool;
-        pool.reserve(workers - 1);
-
-        for (size_t t = 1; t < workers; ++t)
-          pool.emplace_back(work);
-
-        work();
-      }
+      ThreadPool::Instance().Run(workers - 1, work);
 
       const unsigned log2_task =
           static_cast<unsigned>(hwy::Num0BitsBelowLS1Bit_Nonzero64(TASK_CHUNKS));
@@ -243,6 +237,85 @@ private:
   static constexpr size_t TASK_CHUNKS = 256;
   static constexpr size_t TASK_BYTES = TASK_CHUNKS * 1024;
   static constexpr size_t MIN_PARALLEL_TASKS = 4;
+
+  class ThreadPool
+  {
+  public:
+    static ThreadPool& Instance()
+    {
+      static ThreadPool pool;
+      return pool;
+    }
+
+    template <class F> void Run(size_t helpers, const F& work)
+    {
+      std::lock_guard<std::mutex> run_lock(run_mutex_);
+
+      while (threads_.size() < helpers)
+        threads_.emplace_back([this] { Worker(); });
+
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        fn_ = [](const void* ctx) { (*static_cast<const F*>(ctx))(); };
+        ctx_ = &work;
+        pending_ = helpers;
+      }
+      start_.notify_all();
+
+      work();
+
+      std::unique_lock<std::mutex> lock(mutex_);
+      pending_ = 0;
+      done_.wait(lock, [this] { return active_ == 0; });
+    }
+
+    ~ThreadPool()
+    {
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        stop_ = true;
+      }
+      start_.notify_all();
+    }
+
+  private:
+    void Worker()
+    {
+      std::unique_lock<std::mutex> lock(mutex_);
+
+      for (;;)
+      {
+        start_.wait(lock, [this] { return stop_ || pending_ > 0; });
+
+        if (stop_)
+          return;
+
+        --pending_;
+        ++active_;
+
+        void (*const fn)(const void*) = fn_;
+        const void* const ctx = ctx_;
+
+        lock.unlock();
+        fn(ctx);
+        lock.lock();
+
+        if (--active_ == 0)
+          done_.notify_one();
+      }
+    }
+
+    std::mutex run_mutex_;
+    std::mutex mutex_;
+    std::condition_variable start_;
+    std::condition_variable done_;
+    void (*fn_)(const void*) = nullptr;
+    const void* ctx_ = nullptr;
+    size_t pending_ = 0;
+    size_t active_ = 0;
+    bool stop_ = false;
+    std::vector<std::jthread> threads_;
+  };
 
   alignas(64) uint32_t cv_stack_[54 * 8];
   alignas(64) uint8_t chunk_buffer_[1024];

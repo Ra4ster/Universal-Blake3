@@ -11,8 +11,6 @@
 
 #include <hwy/highway.h>
 
-namespace Deep
-{
 namespace hn = hwy::HWY_NAMESPACE;
 
 class Blake3
@@ -735,4 +733,3 @@ private:
     ++cv_stack_len_;
   }
 };
-} // namespace Deep

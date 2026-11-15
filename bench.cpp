@@ -12,7 +12,7 @@
 int main()
 {
   constexpr size_t DATA_SIZE = 256ull * 1024 * 1024;
-  constexpr int ITERATIONS = 10;
+  constexpr int ITERATIONS = 100;
 
   // Generate 256 MiB of deterministic binary data.
   std::vector<uint8_t> data(DATA_SIZE);
@@ -35,7 +35,7 @@ int main()
 
     const auto hash = [&]
     {
-      Deep::Blake3 hasher;
+      Blake3 hasher;
       if (threads == 1)
         hasher.Update(data.data(), data.size());
       else
@@ -83,8 +83,7 @@ int main()
 
   const unsigned threads = std::max(1u, std::thread::hardware_concurrency());
 
-  bench("1 thread", 1);
-  bench((std::to_string(threads) + " threads").c_str(), threads);
+  bench("20 threads", 20);
 
   return 0;
 }

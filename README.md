@@ -13,8 +13,8 @@ I'll let these results speak for themselves.
 
 |            | Universal Blake3        | Reference `blake3` 1.0.11 |
 | ---------- | ----------------------- | ------------------------- |
-| 1 thread   | 61–65 ms (4.1–4.4 GB/s) | 60–63 ms (4.3–4.5 GB/s)   |
-| 20 threads | 9.0–9.5 ms (28–30 GB/s) | 8.1 ms (33 GB/s)          |
+| 1 thread   | 61–68 ms (3.9–4.4 GB/s) | 60–64 ms (4.2–4.5 GB/s)   |
+| 20 threads | 9.2–9.9 ms (27–29 GB/s) | 8.1 ms (33 GB/s)          |
 
 Single-threaded, this implementation matches the official BLAKE3 library, which uses hand-written AVX2 assembly on this CPU. Multithreaded, it comes within about 10 to 15%.
 
@@ -22,20 +22,20 @@ Single-threaded, this implementation matches the official BLAKE3 library, which 
 
 | Threads | Time    | Throughput |
 | ------- | ------- | ---------- |
-| 1       | 63.3 ms | 4.2 GB/s   |
-| 2       | 34.5 ms | 7.8 GB/s   |
-| 4       | 19.5 ms | 13.8 GB/s  |
-| 6       | 13.9 ms | 19.4 GB/s  |
-| 8       | 12.4 ms | 21.7 GB/s  |
-| 12      | 10.2 ms | 26.3 GB/s  |
-| 20      | 9.3 ms  | 28.8 GB/s  |
+| 1       | 66.9 ms | 4.0 GB/s   |
+| 2       | 34.1 ms | 7.9 GB/s   |
+| 4       | 19.2 ms | 14.0 GB/s  |
+| 6       | 13.7 ms | 19.6 GB/s  |
+| 8       | 12.5 ms | 21.5 GB/s  |
+| 12      | 10.9 ms | 24.6 GB/s  |
+| 20      | 9.7 ms  | 27.7 GB/s  |
 
 Scaling is close to linear across the first 6 performance cores.
 
 ### Test setup
 
 - **CPU:** Intel Core i7-12700H (6 P-cores + 8 E-cores, 20 threads), AVX2
-- **Compiler:** `icpx -O3 -march=native -std=c++20`
+- **Compiler:** `icpx -O3 -DNDEBUG -march=native -std=c++20`
 - **Single-threaded:** `Blake3::Update`
 - **Multithreaded:** `Blake3::UpdateParallel`, which splits the input into 256 KiB subtrees hashed on a persistent thread pool
 - **Reference:** the official BLAKE3 Rust implementation via the Python `blake3` package, timed on a buffer of the same size.
@@ -58,13 +58,14 @@ make
 
 ### Showcase
 
-You can also test out the program and use it easily by running `./Blake3 "content to hash"`.
+You can also test out the program and use it easily by running `./Blake3 "content to hash"`. Alternatively, you can enter a file path to hash its contents, using `./Blake3 --file file.name`.
 
 Here are some useful hashes to test out:
 
 - "": af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262
 - "abc": 6437b3ac38465133ffb63b75273a8db548c558465d79db03fd359c6cd5bd9d85
 - "Hello, World": 21c71df4d665d75c3f3c4c42894ce40c33453d4d4d204df175686ab5c15dc4f1
+- --file include/blake3.hpp: cea44b0f6c781c28c5c1b82cc9f95099eccf88d0b2d5a35c3e0994caada0578f _(The header library's hash of itself!)_
 
 <div align="center">
     <img width="500" src="blake3_cli.png" alt="Blake3 running in the CLI"/>

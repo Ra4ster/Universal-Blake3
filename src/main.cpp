@@ -1,12 +1,13 @@
-#include <cstdio>
-#include <cstdlib>
 #include <cstring>
-#include <fcntl.h>
 #include <string>
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
-
+#endif
 #include "blake3.hpp"
 
 #ifndef ASSERT
@@ -31,16 +32,40 @@ int main(int argc, char* argv[])
   size_t input_size = strlen(input);
 
   int is_file = 0;
-  int fd = -1;
-#ifdef __unix__
-  struct stat st;
+#ifdef _WIN32
+  HANDLE hFile = INVALID_HANDLE_VALUE;
+  HANDLE hMap = NULL;
+  LARGE_INTEGER fileSize;
 #else
-
+  struct stat st;
+  int fd = -1;
 #endif
 
   if (argc == 3)
   {
-#ifdef __unix__
+#ifdef _WIN32
+    hFile = CreateFileA(
+        argv[2], GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    ASSERT(hFile != INVALID_HANDLEVALUE, "Cannot open file.")
+    ASSERT(GetFileSizeEx(hFile, &fileSize) != 0, "Cannot fetch file metadata.")
+
+    if (fileSize.QuadPart == 0)
+    {
+      input = NULL;
+      input_size = 0;
+    }
+    else
+    {
+      hMap = CreateFileMappingA(hFile, NULL, PAGE_READONLY, 0, 0, NULL);
+      ASSERT(hMap != NULL, "Failed to create file mapping.")
+
+      input = (char*)MapViewOfFile(hMap, FILE_MAP_READ, 0, 0, 0);
+      ASSERT(input != NULL, "Failed to map file to memory.")
+
+      input_size = (size_t)fileSize.QuadPart;
+      is_file = 1;
+    }
+#else
     ASSERT(strcmp(argv[1], "--file") == 0, "2nd arg must be --file")
 
     fd = open(argv[2], O_RDONLY);
@@ -59,8 +84,6 @@ int main(int argc, char* argv[])
       input_size = st.st_size;
       is_file = 1;
     }
-#else
-
 #endif
   }
 
@@ -69,13 +92,14 @@ int main(int argc, char* argv[])
   printf("%s\n", hasher.Hex().c_str());
   if (is_file)
   {
-#ifdef __unix__
+#ifdef _WIN32
+    UnmapViewOfFile(input);
+    CloseHandle(hMap);
+    CloseHandle(hFile);
+#else
     ASSERT(munmap(input, st.st_size) == 0, "Could not unmap memory back to file.");
     ASSERT(close(fd) == 0, "Error in closing file.");
-#else
-
 #endif
   }
-
   return 0;
 }

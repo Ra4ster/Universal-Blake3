@@ -3,6 +3,11 @@
 #include <atomic>
 #include <bit>
 #include <condition_variable>
+#if defined(_M_X64) || defined(_M_IX86)
+#include <intrin.h>
+#elif defined(__i386__) || defined(__x86_64__)
+#include <cpuid.h>
+#endif
 #include <cstdint>
 #include <mutex>
 #include <string>
@@ -93,7 +98,12 @@ public:
           if (i >= tasks)
             break;
 
-          HashSubtree(ptr + i * TASK_BYTES, TASK_CHUNKS, base + i * TASK_CHUNKS, &cvs[i * 8]);
+          if (OnEfficiencyCore())
+            HashSubtree<true>(
+                ptr + i * TASK_BYTES, TASK_CHUNKS, base + i * TASK_CHUNKS, &cvs[i * 8]);
+          else
+            HashSubtree<false>(
+                ptr + i * TASK_BYTES, TASK_CHUNKS, base + i * TASK_CHUNKS, &cvs[i * 8]);
         }
       };
 
@@ -155,13 +165,13 @@ public:
       if (last && cv_stack_len_ == 0)
         flags |= ROOT;
 
-      Compress(d,
-               cv,
-               block,
-               counter_low,
-               counter_high,
-               hn::Set(d, static_cast<uint32_t>(block_len)),
-               hn::Set(d, flags));
+      Compress<false>(d,
+                      cv,
+                      block,
+                      counter_low,
+                      counter_high,
+                      hn::Set(d, static_cast<uint32_t>(block_len)),
+                      hn::Set(d, flags));
     }
 
     size_t stack_len = cv_stack_len_;
@@ -179,8 +189,7 @@ public:
       }
 
       const uint32_t flags = PARENT | (stack_len == 0 ? ROOT : 0u);
-
-      Compress(d, cv, block, hn::Zero(d), hn::Zero(d), hn::Set(d, 64u), hn::Set(d, flags));
+      Compress<false>(d, cv, block, hn::Zero(d), hn::Zero(d), hn::Set(d, 64u), hn::Set(d, flags));
     }
 
     constexpr char hex_digits[] = "0123456789abcdef";
@@ -221,6 +230,10 @@ private:
       {12, 13, 9, 11, 15, 10, 14, 8, 7, 2, 5, 3, 0, 1, 6, 4},
       {9, 14, 11, 5, 8, 12, 15, 1, 13, 3, 0, 10, 2, 6, 4, 7},
       {11, 15, 5, 0, 1, 9, 8, 6, 14, 10, 2, 12, 3, 4, 7, 13}};
+  static constexpr uint8_t cols[4][4] = {
+      {0, 4, 8, 12}, {1, 5, 9, 13}, {2, 6, 10, 14}, {3, 7, 11, 15}};
+  static constexpr uint8_t dia[4][4] = {
+      {0, 5, 10, 15}, {1, 6, 11, 12}, {2, 7, 8, 13}, {3, 4, 9, 14}};
 
   static constexpr uint32_t CHUNK_START = 1u;
   static constexpr uint32_t CHUNK_END = 2u;
@@ -361,6 +374,29 @@ private:
   }
 
   template <class D>
+  static HWY_INLINE void Half(D d, hn::Vec<D>* words, const uint8_t (&x)[4][4], const hn::Vec<D>* m,
+                              const uint8_t* s) noexcept
+  {
+    int i = 0;
+    for (; i < 4; ++i)
+      words[x[i][0]] = hn::Add(hn::Add(words[x[i][0]], words[x[i][1]]), m[s[2 * i]]);
+    for (i = 0; i < 4; ++i)
+      words[x[i][3]] = Rotr<16, D>(d, hn::Xor(words[x[i][3]], words[x[i][0]]));
+    for (i = 0; i < 4; ++i)
+      words[x[i][2]] = hn::Add(words[x[i][2]], words[x[i][3]]);
+    for (i = 0; i < 4; ++i)
+      words[x[i][1]] = Rotr<12, D>(d, hn::Xor(words[x[i][1]], words[x[i][2]]));
+    for (i = 0; i < 4; ++i)
+      words[x[i][0]] = hn::Add(hn::Add(words[x[i][0]], words[x[i][1]]), m[s[2 * i + 1]]);
+    for (i = 0; i < 4; ++i)
+      words[x[i][3]] = Rotr<8, D>(d, hn::Xor(words[x[i][3]], words[x[i][0]]));
+    for (i = 0; i < 4; ++i)
+      words[x[i][2]] = hn::Add(words[x[i][2]], words[x[i][3]]);
+    for (i = 0; i < 4; ++i)
+      words[x[i][1]] = Rotr<7, D>(d, hn::Xor(words[x[i][1]], words[x[i][2]]));
+  }
+
+  template <bool IL, class D>
   static HWY_INLINE void Compress(D d, hn::Vec<D>* cv, const hn::Vec<D>* m, hn::Vec<D> counter_low,
                                   hn::Vec<D> counter_high, hn::Vec<D> block_len,
                                   hn::Vec<D> flags) noexcept
@@ -371,7 +407,6 @@ private:
 
     for (int i = 0; i < 8; ++i)
       words[i] = cv[i];
-
     for (int i = 0; i < 4; ++i)
       words[i + 8] = hn::Set(d, default_cv[i]);
 
@@ -384,15 +419,23 @@ private:
     {
       const uint8_t* s = msg_schedule[r];
 
-      QRound(d, words, 0, 4, 8, 12, m[s[0]], m[s[1]]);
-      QRound(d, words, 1, 5, 9, 13, m[s[2]], m[s[3]]);
-      QRound(d, words, 2, 6, 10, 14, m[s[4]], m[s[5]]);
-      QRound(d, words, 3, 7, 11, 15, m[s[6]], m[s[7]]);
+      if constexpr (IL)
+      {
+        Half(d, words, cols, m, s);
+        Half(d, words, dia, m, s + 8);
+      }
+      else
+      {
+        QRound(d, words, 0, 4, 8, 12, m[s[0]], m[s[1]]);
+        QRound(d, words, 1, 5, 9, 13, m[s[2]], m[s[3]]);
+        QRound(d, words, 2, 6, 10, 14, m[s[4]], m[s[5]]);
+        QRound(d, words, 3, 7, 11, 15, m[s[6]], m[s[7]]);
 
-      QRound(d, words, 0, 5, 10, 15, m[s[8]], m[s[9]]);
-      QRound(d, words, 1, 6, 11, 12, m[s[10]], m[s[11]]);
-      QRound(d, words, 2, 7, 8, 13, m[s[12]], m[s[13]]);
-      QRound(d, words, 3, 4, 9, 14, m[s[14]], m[s[15]]);
+        QRound(d, words, 0, 5, 10, 15, m[s[8]], m[s[9]]);
+        QRound(d, words, 1, 6, 11, 12, m[s[10]], m[s[11]]);
+        QRound(d, words, 2, 7, 8, 13, m[s[12]], m[s[13]]);
+        QRound(d, words, 3, 4, 9, 14, m[s[14]], m[s[15]]);
+      }
     }
 
     for (int i = 0; i < 8; ++i)
@@ -490,7 +533,7 @@ private:
     }
   }
 
-  template <class D>
+  template <bool IL, class D>
   static HWY_INLINE void HashChunks(D d, const uint8_t* data, size_t valid, uint64_t counter,
                                     hn::Vec<D>* cv) noexcept
   {
@@ -523,11 +566,11 @@ private:
 
       const uint32_t flags = (offset == 0 ? CHUNK_START : 0u) | (offset == 960 ? CHUNK_END : 0u);
 
-      Compress(d, cv, block, counter_low, counter_high, block_len, hn::Set(d, flags));
+      Compress<IL>(d, cv, block, counter_low, counter_high, block_len, hn::Set(d, flags));
     }
   }
 
-  template <class D>
+  template <bool IL, class D>
   static HWY_INLINE void MergeParents(D d, const hn::Vec<D>* lo, const hn::Vec<D>* hi,
                                       hn::Vec<D>* out) noexcept
   {
@@ -543,13 +586,13 @@ private:
       cv[j] = hn::Set(d, default_cv[j]);
     }
 
-    Compress(d, cv, block, hn::Zero(d), hn::Zero(d), hn::Set(d, 64u), hn::Set(d, PARENT));
+    Compress<IL>(d, cv, block, hn::Zero(d), hn::Zero(d), hn::Set(d, 64u), hn::Set(d, PARENT));
 
     for (int j = 0; j < 8; ++j)
       out[j] = cv[j];
   }
 
-  template <class D>
+  template <bool IL, class D>
   static HWY_INLINE void HashGroup(D d, const uint8_t* data, size_t batches, uint64_t counter,
                                    uint32_t* out) noexcept
   {
@@ -559,14 +602,14 @@ private:
     V cvs[MAX_BATCHES][8];
 
     for (size_t b = 0; b < batches; ++b)
-      HashChunks(d, data + b * lanes * 1024, lanes, counter + b * lanes, cvs[b]);
+      HashChunks<IL>(d, data + b * lanes * 1024, lanes, counter + b * lanes, cvs[b]);
 
     for (size_t n = batches; n > 1; n /= 2)
       for (size_t i = 0; i < n / 2; ++i)
-        MergeParents(d, cvs[2 * i], cvs[2 * i + 1], cvs[i]);
+        MergeParents<IL>(d, cvs[2 * i], cvs[2 * i + 1], cvs[i]);
 
     for (size_t width = lanes; width > 1; width /= 2)
-      MergeParents(d, cvs[0], cvs[0], cvs[0]);
+      MergeParents<IL>(d, cvs[0], cvs[0], cvs[0]);
 
     for (int j = 0; j < 8; ++j)
       out[j] = hn::GetLane(cvs[0][j]);
@@ -588,12 +631,38 @@ private:
       block[j + 8] = hn::Set(d, right[j]);
     }
 
-    Compress(d, cv, block, hn::Zero(d), hn::Zero(d), hn::Set(d, 64u), hn::Set(d, PARENT));
+    Compress<false>(d, cv, block, hn::Zero(d), hn::Zero(d), hn::Set(d, 64u), hn::Set(d, PARENT));
 
     for (int j = 0; j < 8; ++j)
       out[j] = hn::GetLane(cv[j]);
   }
 
+  static bool OnEfficiencyCore() noexcept
+  {
+#if defined(_M_X64) || defined(_M_IX86)
+    int regs[4];
+
+    __cpuid(regs, 0);
+    if (static_cast<uint32_t>(regs[0]) < 0x1A)
+      return false;
+
+    __cpuidex(regs, 0x1A, 0);
+
+    return (static_cast<uint32_t>(regs[0]) >> 24) == 0x20;
+
+#elif defined(__i386__) || defined(__x86_64__)
+    unsigned eax, ebx, ecx, edx;
+
+    if (!__get_cpuid_count(0x1A, 0, &eax, &ebx, &ecx, &edx))
+      return false;
+    return (eax >> 24) == 0x20;
+
+#else
+    return false;
+#endif
+  }
+
+  template <bool IL>
   static void HashSubtree(const uint8_t* data, size_t chunks, uint64_t counter,
                           uint32_t* out) noexcept
   {
@@ -602,7 +671,7 @@ private:
 
     if (chunks <= MAX_BATCHES * lanes)
     {
-      HashGroup(d, data, chunks / lanes, counter, out);
+      HashGroup<IL>(d, data, chunks / lanes, counter, out);
       return;
     }
 
@@ -611,8 +680,8 @@ private:
     uint32_t left[8];
     uint32_t right[8];
 
-    HashSubtree(data, half, counter, left);
-    HashSubtree(data + half * 1024, half, counter + half, right);
+    HashSubtree<IL>(data, half, counter, left);
+    HashSubtree<IL>(data + half * 1024, half, counter + half, right);
 
     MergePair(left, right, out);
   }
@@ -643,7 +712,7 @@ private:
 
       const uint32_t flags = (i == 0 ? CHUNK_START : 0u) | (i == 960 ? CHUNK_END : 0u);
 
-      Compress(d, cv, block, counter_low, counter_high, hn::Set(d, 64u), hn::Set(d, flags));
+      Compress<false>(d, cv, block, counter_low, counter_high, hn::Set(d, 64u), hn::Set(d, flags));
     }
 
     uint32_t result[8];
@@ -670,7 +739,7 @@ private:
           batches *= 2;
 
         uint32_t root[8];
-        HashGroup(d, data, batches, chunk_counter_, root);
+        HashGroup<false>(d, data, batches, chunk_counter_, root);
 
         const size_t total = batches * lanes;
 
@@ -686,7 +755,7 @@ private:
         const size_t count = std::min(num_chunks, to_boundary);
 
         V cv[8];
-        HashChunks(d, data, count, chunk_counter_, cv);
+        HashChunks<false>(d, data, count, chunk_counter_, cv);
 
         HWY_ALIGN uint32_t lane_words[MAX_LANES];
         uint32_t lane_results[MAX_LANES][8];

@@ -1,5 +1,5 @@
 CXX = icpx
-OPS = -DNDEBUG -march=native # Tune this to your own CPU!
+OPS = -DNDEBUG -mllvm -enable-misched=false -march=native # Tune this to your own CPU and compiler!
 
 CXXFLAGS = -O3 -Wall -Wextra $(OPS) -std=c++20 -pthread
 CPPFLAGS = -Iinclude -Iexternal/highway

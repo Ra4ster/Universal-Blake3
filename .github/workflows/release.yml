@@ -1,0 +1,29 @@
+name: Release Headers
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  package-headers:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Package Headers
+        run: |
+          mkdir blake3-headers
+
+          cp -r include blake3-headers/
+          cp -r external blake3-headers/
+          cp README.md blake3-headers/
+
+          zip -r blake3-headers.zip blake3-headers/
+
+      - name: Upload Release Asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: blake3-headers.zip
+          token: ${{ secrets.GITHUB_TOKEN }}

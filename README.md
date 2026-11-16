@@ -41,29 +41,29 @@ I'll let these results speak for themselves.
 
 |            | Universal Blake3        | Reference `blake3` 1.0.11 |
 | ---------- | ----------------------- | ------------------------- |
-| 1 thread   | 61–68 ms (3.9–4.4 GB/s) | 60–64 ms (4.2–4.5 GB/s)   |
-| 20 threads | 9.2–9.9 ms (27–29 GB/s) | 8.1 ms (33 GB/s)          |
+| 1 thread   | 67–71 ms (3.8–4.0 GB/s) | 63–64 ms (4.2–4.3 GB/s)   |
+| 20 threads | 8.3–8.9 ms (30–32 GB/s) | 7.6 ms (35 GB/s)          |
 
-Single-threaded, this implementation matches the official BLAKE3 library, which uses hand-written AVX2 assembly on this CPU. Multithreaded, it comes within about 5%.
+Both single-threaded and multithreaded, this implementation comes within about 5 to 10% of the official BLAKE3 library, which uses hand-written AVX2 assembly on this CPU.
 
 ### Thread scaling
 
 | Threads | Time    | Throughput |
 | ------- | ------- | ---------- |
-| 1       | 66.9 ms | 4.0 GB/s   |
-| 2       | 34.1 ms | 7.9 GB/s   |
-| 4       | 19.2 ms | 14.0 GB/s  |
-| 6       | 13.7 ms | 19.6 GB/s  |
-| 8       | 12.5 ms | 21.5 GB/s  |
-| 12      | 10.9 ms | 24.6 GB/s  |
-| 20      | 9.7 ms  | 27.7 GB/s  |
+| 1       | 69.5 ms | 3.9 GB/s   |
+| 2       | 34.7 ms | 7.7 GB/s   |
+| 4       | 19.4 ms | 13.9 GB/s  |
+| 6       | 13.8 ms | 19.4 GB/s  |
+| 8       | 12.1 ms | 22.1 GB/s  |
+| 12      | 10.1 ms | 26.6 GB/s  |
+| 20      | 8.9 ms  | 30.3 GB/s  |
 
 Scaling is close to linear across the first 6 performance cores.
 
 ### Test setup
 
 - **CPU:** Intel Core i7-12700H (6 P-cores + 8 E-cores, 20 threads), AVX2
-- **Compiler:** `icpx -O3 -DNDEBUG -march=native -std=c++20`
+- **Compiler:** `icpx -O3 -DNDEBUG -mllvm -enable-misched=false -march=native -std=c++20`
 - **Single-threaded:** `Blake3::Update`
 - **Multithreaded:** `Blake3::UpdateParallel`, which splits the input into 256 KiB subtrees hashed on a persistent thread pool
 - **Reference:** the official BLAKE3 Rust implementation via the Python `blake3` package, timed on a buffer of the same size.

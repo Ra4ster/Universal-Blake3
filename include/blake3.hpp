@@ -134,7 +134,14 @@ public:
     close(fd);
     return ok;
 #else
-    std::FILE* const file = std::fopen(path, "rb");
+    std::FILE* file = nullptr;
+
+#if defined(_WIN32)
+    if (fopen_s(&file, path, "rb") != 0)
+      file = nullptr;
+#else
+    file = std::fopen(path, "rb");
+#endif
 
     if (file == nullptr)
       return false;

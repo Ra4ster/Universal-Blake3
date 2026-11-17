@@ -13,9 +13,7 @@ import tempfile
 
 import blake3
 
-# Sizes around every boundary the implementation treats specially: the 64-byte block, the
-# 1024-byte chunk, the 256 KiB parallel task, the point where hashing goes multithreaded
-# (just over 1 MiB), the 16 MiB streaming buffer, and a couple of large inputs.
+# Sizes around the block, chunk, parallel-task and stream-buffer boundaries
 FILE_SIZES = [
     0, 1, 63, 64, 65, 1023, 1024, 1025, 2048, 8192, 65536,
     262143, 262144, 262145, 1048576,
@@ -70,7 +68,7 @@ def main():
 
             check(f"file  {size:>9} bytes", run(exe, "--file", path), expected)
 
-            # Reading from a pipe exercises the sequential (non-seekable) path.
+            # A pipe exercises the non-seekable path
             if os.name == "posix":
                 with open(path, "rb") as f:
                     cat = subprocess.Popen(["cat"], stdin=f, stdout=subprocess.PIPE)

@@ -1,6 +1,5 @@
 #include <cstdio>
 #include <cstring>
-#include <string>
 
 #include "blake3.hpp"
 

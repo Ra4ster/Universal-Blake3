@@ -8,11 +8,21 @@
 #elif defined(__i386__) || defined(__x86_64__)
 #include <cpuid.h>
 #endif
+#include <cerrno>
+#include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
+
+#if defined(__unix__) || defined(__APPLE__)
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 #include <hwy/highway.h>
 
@@ -63,11 +73,7 @@ public:
     if (threads == 0)
       threads = std::thread::hardware_concurrency();
 
-    const size_t fill = buffer_len_ == 0 ? 0 : 1024 - buffer_len_;
-    const uint64_t chunks_after = chunk_counter_ + (buffer_len_ == 0 ? 0 : 1);
-    const size_t pad =
-        static_cast<size_t>((TASK_CHUNKS - (chunks_after & (TASK_CHUNKS - 1))) & (TASK_CHUNKS - 1));
-    const size_t prefix = fill + pad * 1024;
+    const size_t prefix = TaskAlignPrefix();
 
     if (threads > 1 && len > prefix && len - prefix > MIN_PARALLEL_TASKS * TASK_BYTES)
     {
@@ -75,53 +81,75 @@ public:
       ptr += prefix;
       len -= prefix;
 
-      if (buffer_len_ == 1024)
-      {
-        ProcessChunk();
-        ++chunk_counter_;
-        buffer_len_ = 0;
-      }
+      FlushFullBuffer();
 
       const size_t tasks = (len - 1) / TASK_BYTES;
-      const size_t workers = std::min<size_t>(threads, tasks);
-      const uint64_t base = chunk_counter_;
 
-      std::vector<uint32_t> cvs(tasks * 8);
-      std::atomic<size_t> next{0};
-
-      const auto work = [&]() noexcept
-      {
-        for (;;)
-        {
-          const size_t i = next.fetch_add(1, std::memory_order_relaxed);
-
-          if (i >= tasks)
-            break;
-
-          if (OnEfficiencyCore())
-            HashSubtree<true>(
-                ptr + i * TASK_BYTES, TASK_CHUNKS, base + i * TASK_CHUNKS, &cvs[i * 8]);
-          else
-            HashSubtree<false>(
-                ptr + i * TASK_BYTES, TASK_CHUNKS, base + i * TASK_CHUNKS, &cvs[i * 8]);
-        }
-      };
-
-      ThreadPool::Instance().Run(workers - 1, work);
-
-      const unsigned log2_task = static_cast<unsigned>(std::countr_zero(TASK_CHUNKS));
-
-      for (size_t i = 0; i < tasks; ++i)
-      {
-        PushChainingValue(&cvs[i * 8], log2_task);
-        chunk_counter_ += TASK_CHUNKS;
-      }
+      HashTasks(tasks, threads, [ptr](size_t i, size_t) noexcept { return ptr + i * TASK_BYTES; });
 
       ptr += tasks * TASK_BYTES;
       len -= tasks * TASK_BYTES;
     }
 
     Update(ptr, len);
+  }
+
+  // Hashes the whole file at `path`, as if its bytes had been passed to UpdateParallel.
+  // Regular files are read in parallel: each worker reads its 256 KiB task into a private
+  // buffer and hashes it from there, which is faster than hashing through a memory mapping.
+  // Returns false if the file cannot be opened or read; the hasher must then be discarded.
+  bool UpdateFile(const char* path, unsigned threads = 0)
+  {
+    if (threads == 0)
+      threads = std::thread::hardware_concurrency();
+
+#if defined(__unix__) || defined(__APPLE__)
+    const int fd = open(path, O_RDONLY | O_CLOEXEC);
+
+    if (fd < 0)
+      return false;
+
+    struct stat st;
+    bool ok = false;
+
+    if (fstat(fd, &st) == 0)
+    {
+      if (S_ISREG(st.st_mode))
+        ok = UpdateRegularFile(fd, static_cast<uint64_t>(st.st_size), threads);
+      else
+        ok = UpdateStream(
+            [fd](uint8_t* dst, size_t n) noexcept -> ptrdiff_t
+            {
+              for (;;)
+              {
+                const ssize_t k = read(fd, dst, n);
+
+                if (k >= 0 || errno != EINTR)
+                  return static_cast<ptrdiff_t>(k);
+              }
+            },
+            threads);
+    }
+
+    close(fd);
+    return ok;
+#else
+    std::FILE* const file = std::fopen(path, "rb");
+
+    if (file == nullptr)
+      return false;
+
+    const bool ok = UpdateStream(
+        [file](uint8_t* dst, size_t n) noexcept -> ptrdiff_t
+        {
+          const size_t k = std::fread(dst, 1, n, file);
+          return (k == 0 && std::ferror(file)) ? -1 : static_cast<ptrdiff_t>(k);
+        },
+        threads);
+
+    std::fclose(file);
+    return ok;
+#endif
   }
 
   std::string Hex() noexcept
@@ -244,6 +272,190 @@ private:
   static constexpr size_t TASK_CHUNKS = 256;
   static constexpr size_t TASK_BYTES = TASK_CHUNKS * 1024;
   static constexpr size_t MIN_PARALLEL_TASKS = 4;
+  static constexpr size_t STREAM_BYTES = 64 * TASK_BYTES;
+
+  // Bytes needed to finish the buffered chunk and reach the next TASK_CHUNKS boundary.
+  size_t TaskAlignPrefix() const noexcept
+  {
+    const size_t fill = buffer_len_ == 0 ? 0 : 1024 - buffer_len_;
+    const uint64_t chunks_after = chunk_counter_ + (buffer_len_ == 0 ? 0 : 1);
+    const size_t pad =
+        static_cast<size_t>((TASK_CHUNKS - (chunks_after & (TASK_CHUNKS - 1))) & (TASK_CHUNKS - 1));
+
+    return fill + pad * 1024;
+  }
+
+  void FlushFullBuffer() noexcept
+  {
+    if (buffer_len_ == 1024)
+    {
+      ProcessChunk();
+      ++chunk_counter_;
+      buffer_len_ = 0;
+    }
+  }
+
+  // Hashes `tasks` consecutive TASK_BYTES-sized subtrees on the thread pool and pushes their
+  // chaining values. fetch(i, slot) returns the bytes of task i, or nullptr to skip it after
+  // an error. slot identifies the calling worker and is below min(threads, tasks).
+  template <class Fetch> void HashTasks(size_t tasks, unsigned threads, const Fetch& fetch)
+  {
+    const size_t workers = std::min<size_t>(threads, tasks);
+    const uint64_t base = chunk_counter_;
+
+    std::vector<uint32_t> cvs(tasks * 8);
+    std::atomic<size_t> next{0};
+    std::atomic<size_t> slots{0};
+
+    const auto work = [&]() noexcept
+    {
+      const size_t slot = slots.fetch_add(1, std::memory_order_relaxed);
+
+      for (;;)
+      {
+        const size_t i = next.fetch_add(1, std::memory_order_relaxed);
+
+        if (i >= tasks)
+          break;
+
+        const uint8_t* const src = fetch(i, slot);
+
+        if (src == nullptr)
+          continue;
+
+        if (OnEfficiencyCore())
+          HashSubtree<true>(src, TASK_CHUNKS, base + i * TASK_CHUNKS, &cvs[i * 8]);
+        else
+          HashSubtree<false>(src, TASK_CHUNKS, base + i * TASK_CHUNKS, &cvs[i * 8]);
+      }
+    };
+
+    ThreadPool::Instance().Run(workers - 1, work);
+
+    const unsigned log2_task = static_cast<unsigned>(std::countr_zero(TASK_CHUNKS));
+
+    for (size_t i = 0; i < tasks; ++i)
+    {
+      PushChainingValue(&cvs[i * 8], log2_task);
+      chunk_counter_ += TASK_CHUNKS;
+    }
+  }
+
+  // Feeds a sequential source (pipe, or any file where positional reads are unavailable)
+  // through UpdateParallel one buffer at a time. read(dst, n) returns the bytes read, 0 at
+  // end of input, or a negative value on error.
+  template <class Read> bool UpdateStream(const Read& read, unsigned threads)
+  {
+    const std::unique_ptr<uint8_t[]> buf(new uint8_t[STREAM_BYTES]);
+
+    for (;;)
+    {
+      size_t got = 0;
+      bool eof = false;
+
+      while (got < STREAM_BYTES)
+      {
+        const ptrdiff_t k = read(buf.get() + got, STREAM_BYTES - got);
+
+        if (k < 0)
+          return false;
+
+        if (k == 0)
+        {
+          eof = true;
+          break;
+        }
+
+        got += static_cast<size_t>(k);
+      }
+
+      UpdateParallel(buf.get(), got, threads);
+
+      if (eof)
+        return true;
+    }
+  }
+
+#if defined(__unix__) || defined(__APPLE__)
+  static bool ReadAt(int fd, uint8_t* dst, size_t n, uint64_t offset) noexcept
+  {
+    while (n > 0)
+    {
+      const ssize_t k = pread(fd, dst, n, static_cast<off_t>(offset));
+
+      if (k < 0 && errno == EINTR)
+        continue;
+
+      if (k <= 0)
+        return false;
+
+      dst += k;
+      n -= static_cast<size_t>(k);
+      offset += static_cast<uint64_t>(k);
+    }
+
+    return true;
+  }
+
+  bool UpdateRegularFile(int fd, uint64_t len, unsigned threads)
+  {
+    const std::unique_ptr<uint8_t[]> scratch(new uint8_t[TASK_BYTES]);
+    const size_t prefix = TaskAlignPrefix();
+    uint64_t offset = 0;
+
+    if (threads > 1 && len > prefix && len - prefix > MIN_PARALLEL_TASKS * TASK_BYTES)
+    {
+      if (!ReadAt(fd, scratch.get(), prefix, offset))
+        return false;
+
+      Update(scratch.get(), prefix);
+      offset += prefix;
+      len -= prefix;
+
+      FlushFullBuffer();
+
+      const size_t tasks = static_cast<size_t>((len - 1) / TASK_BYTES);
+      const size_t workers = std::min<size_t>(threads, tasks);
+      const std::unique_ptr<uint8_t[]> bufs(new uint8_t[workers * TASK_BYTES]);
+      std::atomic<bool> failed{false};
+
+      HashTasks(tasks,
+                threads,
+                [&](size_t i, size_t slot) noexcept -> const uint8_t*
+                {
+                  uint8_t* const dst = bufs.get() + slot * TASK_BYTES;
+
+                  if (!ReadAt(fd, dst, TASK_BYTES, offset + i * TASK_BYTES))
+                  {
+                    failed.store(true, std::memory_order_relaxed);
+                    return nullptr;
+                  }
+
+                  return dst;
+                });
+
+      if (failed.load(std::memory_order_relaxed))
+        return false;
+
+      offset += static_cast<uint64_t>(tasks) * TASK_BYTES;
+      len -= static_cast<uint64_t>(tasks) * TASK_BYTES;
+    }
+
+    while (len > 0)
+    {
+      const size_t n = static_cast<size_t>(std::min<uint64_t>(len, TASK_BYTES));
+
+      if (!ReadAt(fd, scratch.get(), n, offset))
+        return false;
+
+      Update(scratch.get(), n);
+      offset += n;
+      len -= n;
+    }
+
+    return true;
+  }
+#endif
 
   class ThreadPool
   {

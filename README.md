@@ -25,6 +25,9 @@ int main(void) {
    // Same as Update, but runs multithreaded:
    b3.UpdateParallel("Hello, World!");
 
+   // Hashes a whole file by path, multithreaded (returns false if it can't be read):
+   b3.UpdateFile("large_file.bin");
+
    // Compute the final tree and get the hash:
    hash = b3.Hex();
 
@@ -33,7 +36,7 @@ int main(void) {
 }
 ```
 
-There are only 3 public methods to this class; it is extremely easy to use!
+There are only 4 public methods to this class; it is extremely easy to use!
 
 ## Performance Results
 

@@ -1,0 +1,83 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unix:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86-64 (GCC)
+            os: ubuntu-latest
+            cxx: g++
+            arch: -march=native
+          - name: Linux x86-64 (Clang)
+            os: ubuntu-latest
+            cxx: clang++
+            arch: -march=native
+          # NEON only. Arm runners are free for public repositories.
+          - name: Linux arm64 (GCC)
+            os: ubuntu-24.04-arm
+            cxx: g++
+            arch: ""
+          - name: macOS arm64 (Apple Clang)
+            os: macos-latest
+            cxx: clang++
+            arch: ""
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set Up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Reference BLAKE3
+        run: python -m pip install blake3
+
+      - name: Build
+        run: >
+          ${{ matrix.cxx }} -O2 -DNDEBUG -Wall -Wextra -std=c++20 -pthread ${{ matrix.arch }}
+          -Iinclude -Iexternal/highway src/main.cpp -o Blake3
+
+      - name: Check Digests
+        run: python test.py ./Blake3
+
+  windows:
+    name: Windows x86-64 (MSVC)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set Up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Reference BLAKE3
+        run: python -m pip install blake3
+
+      - name: Configure
+        run: cmake -B build
+
+      - name: Build
+        run: cmake --build build --config Release --target Blake3
+
+      - name: Check Digests
+        run: python test.py build/Release/Blake3.exe
